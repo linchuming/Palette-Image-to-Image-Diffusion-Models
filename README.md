@@ -2,6 +2,14 @@
 
 [Paper](https://arxiv.org/pdf/2111.05826.pdf ) |  [Project](https://iterative-refinement.github.io/palette/ )
 
+## Update by chuming lin
+- add SR3 method to this framework: `python3 run.py -p train -c config/sr3_16_128_ema.json`
+- modify the iter number that is equal to training steps instead of batch size
+- add l1_loss and psnr calculation
+- add DDIM sampling, example: `python3 run.py -p test -c config/sr3_16_128_ema_ddim.json`
+- add PLMS sampling, example: `python3 run.py -p test -c config/sr3_16_128_ema_plms.json`
+- fixed ema model to test/val
+
 ## Brief
 
 This is an unofficial implementation of **Palette: Image-to-Image Diffusion Models** by **Pytorch**, and it is mainly inherited from its super-resolution version [Image-Super-Resolution-via-Iterative-Refinement](https://github.com/Janspiry/Image-Super-Resolution-via-Iterative-Refinement). The code template is from my another seed project: [distributed-pytorch-template](https://github.com/Janspiry/distributed-pytorch-template).

@@ -24,6 +24,7 @@ class Palette(BaseModel):
         ''' networks, dataloder, optimizers, losses, etc. '''
         self.loss_fn = losses[0]
         self.netG = networks[0]
+        self.netG_EMA = None
         if ema_scheduler is not None:
             self.ema_scheduler = ema_scheduler
             self.netG_EMA = copy.deepcopy(self.netG)
@@ -44,9 +45,13 @@ class Palette(BaseModel):
         if self.opt['distributed']:
             self.netG.module.set_loss(self.loss_fn)
             self.netG.module.set_new_noise_schedule(phase=self.phase)
+            if self.netG_EMA:
+                self.netG_EMA.module.set_new_noise_schedule(phase=self.phase)
         else:
             self.netG.set_loss(self.loss_fn)
             self.netG.set_new_noise_schedule(phase=self.phase)
+            if self.netG_EMA:
+                self.netG_EMA.set_new_noise_schedule(phase=self.phase)
 
         ''' can rewrite in inherited class for more informations logging '''
         self.train_metrics = LogTracker(*[m.__name__ for m in losses], phase='train')
@@ -104,14 +109,15 @@ class Palette(BaseModel):
     def train_step(self):
         self.netG.train()
         self.train_metrics.reset()
-        for train_data in tqdm.tqdm(self.phase_loader):
+        for train_data in tqdm.tqdm(self.phase_loader, ncols=0):
             self.set_input(train_data)
             self.optG.zero_grad()
             loss = self.netG(self.gt_image, self.cond_image, mask=self.mask)
             loss.backward()
             self.optG.step()
 
-            self.iter += self.batch_size
+            # self.iter += self.batch_size
+            self.iter += 1
             self.writer.set_iter(self.epoch, self.iter, phase='train')
             self.train_metrics.update(self.loss_fn.__name__, loss.item())
             if self.iter % self.opt['train']['log_iter'] == 0:
@@ -129,25 +135,28 @@ class Palette(BaseModel):
         return self.train_metrics.result()
     
     def val_step(self):
-        self.netG.eval()
+        netG = self.netG
+        if self.netG_EMA:
+            netG = self.netG_EMA
+        netG.eval()
         self.val_metrics.reset()
         with torch.no_grad():
-            for val_data in tqdm.tqdm(self.val_loader):
+            for val_data in tqdm.tqdm(self.val_loader, ncols=0):
                 self.set_input(val_data)
                 if self.opt['distributed']:
                     if self.task in ['inpainting','uncropping']:
-                        self.output, self.visuals = self.netG.module.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = netG.module.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num)
                     else:
-                        self.output, self.visuals = self.netG.module.restoration(self.cond_image, sample_num=self.sample_num)
+                        self.output, self.visuals = netG.module.restoration(self.cond_image, sample_num=self.sample_num)
                 else:
                     if self.task in ['inpainting','uncropping']:
-                        self.output, self.visuals = self.netG.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = netG.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num)
                     else:
-                        self.output, self.visuals = self.netG.restoration(self.cond_image, sample_num=self.sample_num)
+                        self.output, self.visuals = netG.restoration(self.cond_image, sample_num=self.sample_num)
                     
-                self.iter += self.batch_size
+                # self.iter += self.batch_size
                 self.writer.set_iter(self.epoch, self.iter, phase='val')
 
                 for met in self.metrics:
@@ -162,25 +171,28 @@ class Palette(BaseModel):
         return self.val_metrics.result()
 
     def test(self):
-        self.netG.eval()
+        netG = self.netG
+        if self.netG_EMA:
+            netG = self.netG_EMA
+        netG.eval()
         self.test_metrics.reset()
         with torch.no_grad():
-            for phase_data in tqdm.tqdm(self.phase_loader):
+            for phase_data in tqdm.tqdm(self.phase_loader, ncols=0):
                 self.set_input(phase_data)
                 if self.opt['distributed']:
                     if self.task in ['inpainting','uncropping']:
-                        self.output, self.visuals = self.netG.module.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = netG.module.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num)
                     else:
-                        self.output, self.visuals = self.netG.module.restoration(self.cond_image, sample_num=self.sample_num)
+                        self.output, self.visuals = netG.module.restoration(self.cond_image, sample_num=self.sample_num)
                 else:
                     if self.task in ['inpainting','uncropping']:
-                        self.output, self.visuals = self.netG.restoration(self.cond_image, y_t=self.cond_image, 
+                        self.output, self.visuals = netG.restoration(self.cond_image, y_t=self.cond_image, 
                             y_0=self.gt_image, mask=self.mask, sample_num=self.sample_num)
                     else:
-                        self.output, self.visuals = self.netG.restoration(self.cond_image, sample_num=self.sample_num)
+                        self.output, self.visuals = netG.restoration(self.cond_image, sample_num=self.sample_num)
                         
-                self.iter += self.batch_size
+                # self.iter += self.batch_size
                 self.writer.set_iter(self.epoch, self.iter, phase='test')
                 for met in self.metrics:
                     key = met.__name__
@@ -201,20 +213,22 @@ class Palette(BaseModel):
 
     def load_networks(self):
         """ save pretrained model and training state, which only do on GPU 0. """
-        if self.opt['distributed']:
-            netG_label = self.netG.module.__class__.__name__
-        else:
-            netG_label = self.netG.__class__.__name__
+        # if self.opt['distributed']:
+        #     netG_label = self.netG.module.__class__.__name__
+        # else:
+        #     netG_label = self.netG.__class__.__name__
+        netG_label = 'netG'
         self.load_network(network=self.netG, network_label=netG_label, strict=False)
         if self.ema_scheduler is not None:
             self.load_network(network=self.netG_EMA, network_label=netG_label+'_ema', strict=False)
 
     def save_everything(self):
         """ load pretrained model and training state. """
-        if self.opt['distributed']:
-            netG_label = self.netG.module.__class__.__name__
-        else:
-            netG_label = self.netG.__class__.__name__
+        # if self.opt['distributed']:
+        #     netG_label = self.netG.module.__class__.__name__
+        # else:
+        #     netG_label = self.netG.__class__.__name__
+        netG_label = 'netG'
         self.save_network(network=self.netG, network_label=netG_label)
         if self.ema_scheduler is not None:
             self.save_network(network=self.netG_EMA, network_label=netG_label+'_ema')

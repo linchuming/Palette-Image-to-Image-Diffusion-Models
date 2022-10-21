@@ -6,7 +6,10 @@ import numpy as np
 from tqdm import tqdm
 from core.base_network import BaseNetwork
 class Network(BaseNetwork):
-    def __init__(self, unet, beta_schedule, module_name='sr3', **kwargs):
+    def __init__(self, unet, beta_schedule, 
+                 module_name='sr3',
+                 gamma_interp=False,  
+                 **kwargs):
         super(Network, self).__init__(**kwargs)
         if module_name == 'sr3':
             from .sr3_modules.unet import UNet
@@ -15,6 +18,7 @@ class Network(BaseNetwork):
         
         self.denoise_fn = UNet(**unet)
         self.beta_schedule = beta_schedule
+        self.gamma_interp = gamma_interp
 
     def set_loss(self, loss_fn):
         self.loss_fn = loss_fn
@@ -93,7 +97,7 @@ class Network(BaseNetwork):
         
         y_t = default(y_t, lambda: torch.randn_like(y_cond))
         ret_arr = y_t
-        for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
+        for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps, ncols=0):
             t = torch.full((b,), i, device=y_cond.device, dtype=torch.long)
             y_t = self.p_sample(y_t, t, y_cond=y_cond)
             if mask is not None:
@@ -105,10 +109,14 @@ class Network(BaseNetwork):
     def forward(self, y_0, y_cond=None, mask=None, noise=None):
         # sampling from p(gammas)
         b, *_ = y_0.shape
-        t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
-        gamma_t1 = extract(self.gammas, t-1, x_shape=(1, 1))
-        sqrt_gamma_t2 = extract(self.gammas, t, x_shape=(1, 1))
-        sample_gammas = (sqrt_gamma_t2-gamma_t1) * torch.rand((b, 1), device=y_0.device) + gamma_t1
+        if self.gamma_interp:
+            t = torch.randint(1, self.num_timesteps, (b,), device=y_0.device).long()
+            gamma_t1 = extract(self.gammas, t-1, x_shape=(1, 1))
+            sqrt_gamma_t2 = extract(self.gammas, t, x_shape=(1, 1))
+            sample_gammas = (sqrt_gamma_t2-gamma_t1) * torch.rand((b, 1), device=y_0.device) + gamma_t1
+        else:
+            t = torch.randint(0, self.num_timesteps, (b,), device=y_0.device).long()
+            sample_gammas = extract(self.gammas, t, x_shape=(1, 1))
         sample_gammas = sample_gammas.view(b, -1)
 
         noise = default(noise, lambda: torch.randn_like(y_0))

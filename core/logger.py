@@ -16,7 +16,7 @@ class InfoLogger():
         self.rank = opt['global_rank']
         self.phase = opt['phase']
 
-        self.setup_logger(None, opt['path']['experiments_root'], opt['phase'], level=logging.INFO, screen=False)
+        self.setup_logger(None, opt['path']['experiments_root'], opt['phase'], level=logging.INFO, screen=True)
         self.logger = logging.getLogger(opt['phase'])
         self.infologger_ftns = {'info', 'warning', 'debug'}
 
